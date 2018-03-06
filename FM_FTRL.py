@@ -3,24 +3,25 @@
 # @Date    : 2018-02-05 13:44:54
 # @Author  : Ricky (liqiwang@corp.netease.com)
 # @Link    : https://mail.163.com/
+import os
 import pickle
 import numpy as np
+import sklearn.datasets as dt
 from sklearn.metrics import roc_auc_score
-from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
-from LR_FTRL import cal_loss, logistic, retrieve_nonzero, generate_samples, evaluate_model, get_auc
+from LR_FTRL import cal_loss, logistic, generator_nonzero, generate_samples, evaluate_model, get_auc
 '''factorization machine'''
 
 
 class FM:
 
-    def __init__(self, dim, dim_map, sigma,
+    def __init__(self, dim, dim_lat, sigma,
                  alpha_w, alpha_v, beta_w, beta_v,
                  lambda_w1, lambda_w2, lambda_v1, lambda_v2):
         """
         the constructor of FM class
         :param dim: the dimension of feature vector
-        :param dim_map: the mapped dimension of intersected feature vector
+        :param dim_lat: the latent dimension of intersected feature vector
         :param sigma: the scale for the initialization of V
         :param alpha_w: the alpha parameters for learning rate in the update of weights
         :param alpha_v: the alpha parameters for learning rate in the update of V
@@ -33,7 +34,7 @@ class FM:
         """
 
         self.dim = dim
-        self.dim_map = dim_map
+        self.dim_latent = dim_lat
         self.alpha_w = alpha_w
         self.alpha_v = alpha_v
         self.beta_w = beta_w
@@ -49,16 +50,16 @@ class FM:
         self.weights = np.zeros(self.dim + 1)
 
         # initialize the v, zvs, nvs
-        self._zvs = np.zeros((self.dim, self.dim_map))
-        self._nvs = np.zeros((self.dim, self.dim_map))
-        self.V = np.random.normal(scale=sigma, size=(self.dim, self.dim_map))
+        self._zvs = np.zeros((self.dim, self.dim_latent))
+        self._nvs = np.zeros((self.dim, self.dim_latent))
+        self.V = np.random.normal(0, sigma, size=(self.dim, self.dim_latent))
 
-    def update_param(self, sample, label, nonzero_index):
+    def update_param(self, it, sample, label):
         """
         update the parameters: weights, bias, zws, nws, zvs, nvs
+        :param it: stop the update of V for the first iteration
         :param sample: the feature vector                -array vector
         :param label: the ground truth label             -value
-        :param nonzero_index: the nonzero index list     -list
         """
         # update bias
         if np.abs(self._zws[-1]) > self.lambda_w1:
@@ -69,8 +70,7 @@ class FM:
             self.weights[-1] = 0.0
 
         # update weights and V
-        for i in nonzero_index:
-
+        for i in generator_nonzero(sample):
             # update weights
             if np.abs(self._zws[i]) > self.lambda_w1:
                 fore = (self.beta_w + np.sqrt(self._nws[i])) / self.alpha_w + self.lambda_w2
@@ -80,38 +80,88 @@ class FM:
                 self.weights[i] = 0.0
 
             # update V
-            for f in range(self.dim_map):
-                if np.abs(self._zvs[i, f]) <= self.lambda_v1:
-                    fore = (self.beta_v + np.sqrt(self._nvs[i, f])) / self.alpha_v + self.lambda_v2
-                    sign_zvs = -1. if self._zvs[i, f] < 0. else 1.
-                    self.V[i, f] = -1. / fore * (self._zvs[i, f] - sign_zvs * self.lambda_v1)
-                else:
-                    self.V[i, f] = 0.0
+            if it > 0:
+                for f in range(self.dim_latent):
+                    if np.abs(self._zvs[i, f]) > self.lambda_v1:
+                        fore = (self.beta_v + np.sqrt(self._nvs[i, f])) / self.alpha_v + self.lambda_v2
+                        sign_zvs = -1. if self._zvs[i, f] < 0. else 1.
+                        self.V[i, f] = -1. / fore * (self._zvs[i, f] - sign_zvs * self.lambda_v1)
+                    else:
+                        self.V[i, f] = 0.0
 
-        # predict the sample
+        # predict the sample, compute the gradient
         prediction = self.predict(sample)
-
+        base_grad = prediction - label
         # update the zws, nws
-        loss = prediction - label
-        for i in nonzero_index:
-            gradient = loss * sample[i]
+        for i in generator_nonzero(sample):
+            gradient = base_grad * sample[i]
             sigma = (np.sqrt(self._nws[i] + gradient ** 2) - np.sqrt(self._nws[i])) / self.alpha_w
             self._zws[i] += gradient - sigma * self.weights[i]
             self._nws[i] += gradient ** 2
 
             # update the zvs, nvs
-            for f in range(self.dim_map):
-                gradient_v = loss * sample[i] * sum(self.V[:, f] * sample[f]) - self.V[i, f] * (sample[i] ** 2)
+            for f in range(self.dim_latent):
+                gradient_v = base_grad * (sample[i] * sum(self.V[:, f] * sample) - self.V[i, f] * (sample[i] ** 2))
                 sigma = (np.sqrt(self._nvs[i, f] + gradient_v ** 2) - np.sqrt(self._nvs[i, f])) / self.alpha_v
                 self._zvs[i, f] += gradient_v - sigma * self.V[i, f]
                 self._nvs[i, f] += gradient_v ** 2
 
         # update the zws, nws related to bias
-        sigma = (np.sqrt(self._nws[-1] + loss ** 2) - np.sqrt(self._nws[-1])) / self.alpha_w
-        self._zws[-1] += loss - sigma * self.weights[-1]
-        self._nws[-1] += loss ** 2
+        sigma = (np.sqrt(self._nws[-1] + base_grad ** 2) - np.sqrt(self._nws[-1])) / self.alpha_w
+        self._zws[-1] += base_grad - sigma * self.weights[-1]
+        self._nws[-1] += base_grad ** 2
 
         return prediction
+
+    def update_param_sgd(self, sample, label, lr):
+        """
+        update the parameter of FM using sgd
+        :param sample: one single sample
+        :param label: the label
+        :return:
+        """
+        # predict the sample
+        prediction = self.predict(sample)
+        base_grad = prediction - label
+
+        # update the bias and weights
+        self.weights[-1] -= lr * base_grad
+
+        for i in range(self.dim):
+            gradient = base_grad * sample[i]
+            self.weights[i] -= lr * gradient
+
+            # update V
+            for f in range(self.dim_map):
+                sum_f = sum(self.V[:, f] * sample)
+                gradient_v = base_grad * (sample[i] * sum_f - self.V[i, f] * (sample[i] ** 2))
+                self.V[i, f] -= lr * gradient_v
+        return prediction
+
+    def train_sgd(self, samples, labels, iteration, is_print=False, lr=0.2):
+        """
+        train the LR model using the sgd optimization algorithm
+        :param samples: the feature matrix	            -n_sample * dimension
+        :param labels: the label vector  	            -n_sample * 1
+        :param iteration: the stooping criterion        -int
+        :param lr: the learning rate
+        :param is_print: whether to print               -boolean
+        :return:
+        """
+        n_samples, dim = np.shape(samples)
+        i = 0
+        preds = np.zeros(n_samples)
+        while i < iteration:
+            log_loss = 0.0
+            for t in range(n_samples):
+                # retrieve the index of nonzero elements
+                preds[t] = self.update_param_sgd(sample=samples[t], label=labels[t], lr=lr)
+                log_loss += cal_loss(probability=preds[t], true_label=labels[t]) / n_samples
+            train_error = evaluate_model(preds=preds, labels=labels)
+            if i % 10 == 0 & is_print:
+                print("FM-after iteration %s, the total logloss is %s,"
+                      " the training error is %.2f%%" % (i, log_loss, train_error))
+            i += 1
 
     def predict(self, samples):
         """
@@ -119,8 +169,12 @@ class FM:
         :return: prediction                             -array(n_samples, )
         """
         raw_output1 = np.dot(samples, self.weights[:-1]) + self.weights[-1]
-        raw_output2 = (np.square(np.dot(samples, self.V)) - np.dot(np.square(samples), np.square(self.V))).sum()
-        return logistic(raw_output1 + raw_output2 / 2)
+        raw_output2 = np.square(np.dot(samples, self.V)) - np.dot(np.square(samples), np.square(self.V))
+        if len(raw_output2.shape) > 1:
+            raw_output2 = np.sum(raw_output2, axis=1)
+        else:
+            raw_output2 = sum(raw_output2)
+        return logistic(raw_output1 + raw_output2/ 2)
 
     def train_ftrl(self, samples, labels, iteration, is_print=False):
         """
@@ -138,17 +192,16 @@ class FM:
             log_loss = 0.0
             for t in range(n_samples):
                 # retrieve the index of nonzero elements
-                index_list = retrieve_nonzero(samples[t])
-                preds[t] = self.update_param(sample=samples[t], label=labels[t], nonzero_index=index_list)
+                preds[t] = self.update_param(sample=samples[t], label=labels[t], it=i+t)
                 log_loss += cal_loss(probability=preds[t], true_label=labels[t]) / n_samples
             train_error = evaluate_model(preds=preds, labels=labels)
             if i % 10 == 0 & is_print:
                 print("FM-after iteration %s, the total logloss is %s,"
-                      " the training error is %s" % (i, log_loss, train_error))
+                      " the training error is %.2f%%" % (i, log_loss, train_error))
             i += 1
 
     def load_model(self, file_path):
-        with open(file_path, 'r') as f:
+        with open(file_path, 'rb+') as f:
             s = f.read()
             model = pickle.loads(s)
             self.weights[:-1] = model['weights']
@@ -157,18 +210,21 @@ class FM:
 
     def save_model(self, file_path):
         model = {"weights": self.weights[:-1], "bias": self.weights[-1], 'V': self.V}
-        with open(file_path, 'w') as f:
+        if not os.path.exists(file_path):
+            # split the file and path
+            path = file_path.split("/")[:-1]
+            path = "/".join(path)
+            os.makedirs(path)
+        with open(file_path, 'wb+') as f:
             pickle.dump(model, f)
-
 
 if __name__ == "__main__":
 
     # generate the datasets including the testing samples and training samples
-    train_samples, train_labels = generate_samples(15, 100)
-    test_samples, test_labels = generate_samples(15, 20)
+    data_samples, target_samples = generate_samples(15, 10000)
 
     # load bread_cancer datasets from sklearn
-    minint = load_breast_cancer()
+    minint = dt.load_breast_cancer()
     data_samples = minint.data
     target_samples = minint.target
     num_samples, dim_ = data_samples.shape
@@ -181,7 +237,7 @@ if __name__ == "__main__":
     lambda_w1_, lambda_w2_, lambda_v1_, lambda_v2_ = 0.2, 0.2, 0.2, 0.2
     hiddens = 8
     sigma_ = 1.0
-    iteration_ = 40
+    iteration_ = 20
 
     # create the fm model
     fm = FM(dim=dim_, dim_map=hiddens, sigma=sigma_,
@@ -189,13 +245,12 @@ if __name__ == "__main__":
             lambda_w1=lambda_w1_, lambda_w2=lambda_w2_, lambda_v1=lambda_v1_, lambda_v2=lambda_v2_)
 
     fm.train_ftrl(X_train, y_train, iteration_, is_print=True)
-
     # test the unseen samples
     test_preds = fm.predict(X_test)
     test_error = evaluate_model(test_preds, y_test)
     test_auc = roc_auc_score(y_true=y_test, y_score=test_preds)
     my_auc = get_auc(scores=test_preds, labels=y_test)
-    print("test-error: ", test_error)
+    print("test-error: %.2f%%" % test_error)
     print("test-sklearn auc: ", test_auc)
     print("test-my auc: ", my_auc)
 

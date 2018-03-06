@@ -6,8 +6,8 @@
 
 from FM_FTRL import FM
 from LR_FTRL import LR, evaluate_model, get_auc
+import sklearn.datasets as dt
 from sklearn.metrics import roc_auc_score
-from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
 '''using FTRL to update models (logistic regression or factorization machine)'''
 
@@ -87,11 +87,10 @@ class FTRL:
 if __name__ == "__main__":
 
     # load bread_cancer datasets from sklearn
-    minint = load_breast_cancer()
+    minint = dt.load_breast_cancer()
     data_samples = minint.data
     target_samples = minint.target
     num_samples, dim_ = data_samples.shape
-    target_samples = target_samples.reshape(num_samples, 1)
 
     # split all the samples into training data and testing data
     X_train, X_test, y_train, y_test = train_test_split(data_samples, target_samples, test_size=0.2, random_state=42)
@@ -117,8 +116,8 @@ if __name__ == "__main__":
     fm = FTRL(base="fm", args_parse=hyper_params, iteration=iteration_)
 
     # train the fm model
-    lr.fit(X_train, y_train)
     fm.fit(X_train, y_train)
+    lr.fit(X_train, y_train)
 
     # test the unseen samples
     test_preds_lr = lr.predict(X_test)
@@ -130,11 +129,11 @@ if __name__ == "__main__":
     my_test_auc_lr = get_auc(scores=test_preds_lr, labels=y_test)
     my_test_auc_fm = get_auc(scores=test_preds_fm, labels=y_test)
 
-    print("logistic regression-test error: ", test_error_lr)
+    print("logistic regression-test error: %.2f%%" % test_error_lr)
     print("logistic regression-test auc: ", test_auc_lr)
     print("logistic regression-my test auc: ", my_test_auc_lr)
 
-    print("factorization machine-test error: ", test_error_fm)
+    print("factorization machine-test error: %.2f%%" % test_error_fm)
     print("factorization machine-test auc: ", test_auc_fm)
     print("factorization machine-my test auc: ", my_test_auc_fm)
 
