@@ -240,7 +240,7 @@ if __name__ == "__main__":
     iteration_ = 20
 
     # create the fm model
-    fm = FM(dim=dim_, dim_map=hiddens, sigma=sigma_,
+    fm = FM(dim=dim_, dim_latent=hiddens, sigma=sigma_,
             alpha_w=alpha_w_, alpha_v=alpha_v_, beta_w=beta_w_, beta_v=beta_v_,
             lambda_w1=lambda_w1_, lambda_w2=lambda_w2_, lambda_v1=lambda_v1_, lambda_v2=lambda_v2_)
 
