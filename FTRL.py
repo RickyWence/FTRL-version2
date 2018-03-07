@@ -43,7 +43,7 @@ class FTRL:
             lambda_w2 = args_parse['lambda_w2']
             lambda_v1 = args_parse['lambda_v1']
             lambda_v2 = args_parse['lambda_v2']
-            self.model = FM(dim=dim, dim_map=dim_map, sigma=sigma,
+            self.model = FM(dim=dim, dim_latent=dim_map, sigma=sigma,
                             alpha_w=alpha_w, alpha_v=alpha_v, beta_w=beta_w, beta_v=beta_v,
                             lambda_w1=lambda_w1, lambda_w2=lambda_w2, lambda_v1=lambda_v1, lambda_v2=lambda_v2)
 
